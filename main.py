@@ -190,11 +190,11 @@ def setup() -> None:
 setup()
 
 
-def token_encode(role: str, actor: str, programme: str | None = None) -> str:
+def token_encode(role: str, actor: str, programme: str | None = None, ttl: int = 7*24*3600) -> str:
     conn = db()
     try: key = fetch_setting(conn, "token_secret") or ""
     finally: conn.close()
-    payload = {"role":role,"sub":actor,"programme":programme,"exp":int(time.time()+7*24*3600)}
+    payload = {"role":role,"sub":actor,"programme":programme,"exp":int(time.time()+ttl)}
     raw = base64.urlsafe_b64encode(json.dumps(payload,separators=(",",":"),sort_keys=True).encode()).rstrip(b"=").decode()
     mac = hmac.new(key.encode(),raw.encode(),hashlib.sha256).hexdigest()
     return raw+"."+mac
@@ -422,7 +422,7 @@ def health():
 def public():
     conn=db()
     try:
-        return {"registration_open":fetch_setting(conn,"registration_open")=="1", "course":"ST310 Statistical Inference II","programmes":PROGRAMMES}
+        return {"registration_open":fetch_setting(conn,"registration_open")=="1", "course":"ST310 Statistical Inference II","programmes":PROGRAMMES,"seminars":SEMINARS}
     finally: conn.close()
 
 @APP.post("/api/students/register",status_code=201)
@@ -440,7 +440,7 @@ def student_register(body:PersonData):
         conn.execute("UPDATE programme_status SET revision=revision+1,cr_approved_at=NULL,cr_approved_revision=NULL WHERE programme=?",(p["programme"],))
         audit(conn,p["reg_key"],"STUDENT_REGISTERED",p["programme"])
         conn.execute("COMMIT")
-        return {"message":"Registration successful.","student":{k:p[k] for k in ("registration_number","surname","first_name","second_name","programme")}}
+        return {"message":"Registration successful.","student":{k:p[k] for k in ("registration_number","surname","first_name","second_name","programme")}, "student_token":token_encode("student",str(conn.execute("SELECT id FROM students WHERE reg_key=?",(p["reg_key"],)).fetchone()["id"]),ttl=1800)}
     except sqlite3.IntegrityError:
         conn.execute("ROLLBACK")
         raise duplicate_error("registration_number")
@@ -513,7 +513,7 @@ def cr_dashboard(user:dict=Depends(required_role("cr"))):
         cr=conn.execute("SELECT surname,first_name,second_name,programme FROM cr_accounts WHERE reg_key=? AND programme=?",(user["sub"],user["programme"])).fetchone()
         if not cr: raise HTTPException(401,"CR account not found.")
         stats=conn.execute("SELECT * FROM programme_status WHERE programme=?",(cr["programme"],)).fetchone()
-        rows=conn.execute("SELECT surname,first_name,second_name,registration_number,created_at FROM students WHERE programme=? ORDER BY surname COLLATE NOCASE,first_name COLLATE NOCASE,reg_key",(cr["programme"],)).fetchall()
+        rows=conn.execute("SELECT surname,first_name,second_name,registration_number,seminar_code,created_at FROM students WHERE programme=? ORDER BY surname COLLATE NOCASE,first_name COLLATE NOCASE,reg_key",(cr["programme"],)).fetchall()
         return {"cr":dict(cr),"programme":cr["programme"],"programme_name":PROGRAMMES[cr["programme"]],"revision":stats["revision"],"approved_at":stats["cr_approved_at"],"students":[dict(r) for r in rows],"duplicate_alert_count":len(unresolved_duplicates(conn,cr["programme"])),"registration_open":fetch_setting(conn,"registration_open")=="1"}
     finally: conn.close()
 
@@ -557,7 +557,7 @@ def read_admin_data(conn):
         count=conn.execute("SELECT count(*) n FROM students WHERE programme=?",(code,)).fetchone()["n"]
         stats.append({"code":code,"label":label,"count":count,"approved_at":row["cr_approved_at"],"revision":row["revision"]})
     recent=conn.execute("SELECT actor,event,detail,timestamp FROM audit_events ORDER BY id DESC LIMIT 6").fetchall()
-    return {"programmes":stats,"total":sum(x["count"] for x in stats),"approvals":sum(bool(x["approved_at"]) for x in stats),"duplicate_alert_count":len(unresolved_duplicates(conn)),"registration_open":fetch_setting(conn,"registration_open")=="1","final_approved_at":fetch_setting(conn,"final_approved_at"),"recent":[dict(r) for r in recent]}
+    return {"programmes":stats,"total":sum(x["count"] for x in stats),"approvals":sum(bool(x["approved_at"]) for x in stats),"duplicate_alert_count":len(unresolved_duplicates(conn)),"registration_open":fetch_setting(conn,"registration_open")=="1","final_approved_at":fetch_setting(conn,"final_approved_at"),"recent":[dict(r) for r in recent],"seminar_counts":{r["seminar_code"]:r["n"] for r in conn.execute("SELECT seminar_code,COUNT(*) n FROM students GROUP BY seminar_code")},"pending_shifts":conn.execute("SELECT COUNT(*) n FROM seminar_shift_requests WHERE status='pending'").fetchone()["n"]}
 
 @APP.get("/api/admin/dashboard")
 def admin_dashboard(user:dict=Depends(required_role("admin"))):
@@ -569,7 +569,7 @@ def admin_dashboard(user:dict=Depends(required_role("admin"))):
 def admin_students(user:dict=Depends(required_role("admin"))):
     conn=db()
     try:
-        rows=conn.execute("SELECT id,surname,first_name,second_name,registration_number,programme,created_at FROM students ORDER BY CASE programme WHEN 'MATH' THEN 1 WHEN 'BAEST' THEN 2 ELSE 3 END,surname COLLATE NOCASE,first_name COLLATE NOCASE").fetchall()
+        rows=conn.execute("SELECT id,surname,first_name,second_name,registration_number,programme,seminar_code,created_at FROM students ORDER BY CASE programme WHEN 'MATH' THEN 1 WHEN 'BAEST' THEN 2 ELSE 3 END,surname COLLATE NOCASE,first_name COLLATE NOCASE").fetchall()
         return {"students":[dict(r) for r in rows]}
     finally:conn.close()
 
@@ -1025,6 +1025,325 @@ def export_submission_xlsx(user: dict = Depends(required_role("admin"))):
 def export_pdf(user:dict=Depends(required_role("admin"))):
     rows,_=approved_export_rows()
     return Response(content=build_pdf(rows),media_type="application/pdf",headers={"Content-Disposition":"attachment; filename=ST310_Final_Class_List.pdf","Cache-Control":"no-store"})
+
+# V3.3 additive seminar and student-correction functionality.
+SEMINARS = {
+    'MON': {'code':'MON','label':'Monday Seminar','day':'Monday','time':'16:00–16:55','venue':'ALRC'},
+    'THU': {'code':'THU','label':'Thursday Seminar','day':'Thursday','time':'10:00–10:55','venue':'ALRB'},
+    'FRI': {'code':'FRI','label':'Friday Seminar','day':'Friday','time':'18:00–18:55','venue':'ALRD'},
+}
+
+def migrate_v33():
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        columns={row['name'] for row in conn.execute('PRAGMA table_info(students)').fetchall()}
+        if 'seminar_code' not in columns:
+            conn.execute('ALTER TABLE students ADD COLUMN seminar_code TEXT DEFAULT NULL')
+        conn.execute('''CREATE TABLE IF NOT EXISTS seminar_shift_requests (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+           from_code TEXT NOT NULL CHECK(from_code IN ('MON','THU','FRI')),
+           to_code TEXT NOT NULL CHECK(to_code IN ('MON','THU','FRI')),
+           reason TEXT NOT NULL,
+           status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+           created_at TEXT NOT NULL,
+           reviewed_at TEXT,
+           reviewed_by TEXT,
+           review_note TEXT,
+           CHECK(from_code <> to_code)
+        )''')
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_pending_shift_per_student ON seminar_shift_requests(student_id) WHERE status='pending'")
+        conn.execute('CREATE INDEX IF NOT EXISTS shift_requests_by_status ON seminar_shift_requests(status,created_at)')
+        conn.execute('CREATE INDEX IF NOT EXISTS students_by_seminar ON students(seminar_code,programme,surname)')
+        set_setting(conn,'schema_version','3.3')
+        conn.execute('COMMIT')
+    except Exception:
+        if conn.in_transaction: conn.execute('ROLLBACK')
+        raise
+    finally: conn.close()
+
+migrate_v33()
+
+class StudentIdentity(BaseModel):
+    registration_number: str
+    surname: str
+    first_name: str
+    second_name: str = ''
+
+class SeminarSelection(BaseModel):
+    seminar_code: str
+
+class SeminarShiftRequest(BaseModel):
+    to_code: str
+    reason: str = Field(min_length=5,max_length=400)
+
+class SeminarShiftDecision(BaseModel):
+    action: str
+    note: str = Field(min_length=5,max_length=400)
+
+class AdminStudentEdit(PersonData):
+    reason: str = Field(min_length=8,max_length=400)
+    seminar_code: str | None = None
+
+def seminar_name(code):
+    return SEMINARS.get(code,{}).get('label','Not selected')
+
+def student_record(conn,student_id):
+    row=conn.execute('SELECT id,registration_number,surname,first_name,second_name,programme,seminar_code,created_at FROM students WHERE id=?',(student_id,)).fetchone()
+    if row is None: raise HTTPException(404,'Student record not found.')
+    result=dict(row)
+    pending=conn.execute("SELECT id,from_code,to_code,created_at FROM seminar_shift_requests WHERE student_id=? AND status='pending' ORDER BY id DESC LIMIT 1",(student_id,)).fetchone()
+    result['pending_shift']=dict(pending) if pending else None
+    return result
+
+def authorized_student(conn,user):
+    if user.get('role')!='student': raise HTTPException(403,'Student verification required.')
+    try: student_id=int(user['sub'])
+    except (ValueError,TypeError,KeyError): raise HTTPException(401,'Please verify your details again.')
+    row=conn.execute('SELECT id FROM students WHERE id=?',(student_id,)).fetchone()
+    if not row: raise HTTPException(401,'Student record is no longer available.')
+    return student_id
+
+_student_verify_attempts: dict[str,list[float]]=defaultdict(list)
+
+@APP.post('/api/students/verify')
+def verify_existing_student(body:StudentIdentity):
+    # Option B: intentionally limited to choosing a seminar or requesting a shift.
+    if not re.fullmatch(r'[0-9]{4}-04-[0-9]{5}',body.registration_number):
+        raise HTTPException(422,'Registration number must be XXXX-04-XXXXX.')
+    key=reg_key(body.registration_number)
+    now=time.monotonic()
+    history=[t for t in _student_verify_attempts[key] if now-t<900]
+    if len(history)>=12: raise HTTPException(429,'Too many attempts. Try again later.')
+    history.append(now)
+    _student_verify_attempts[key]=history
+    conn=db()
+    try:
+        row=conn.execute('SELECT * FROM students WHERE reg_key=?',(key,)).fetchone()
+        expected=(normalized_name(row['surname']),normalized_name(row['first_name']),normalized_name(row['second_name'])) if row else None
+        received=(normalized_name(body.surname),normalized_name(body.first_name),normalized_name(body.second_name))
+        if expected is None or expected!=received:
+            raise HTTPException(401,'Student details did not match. Check your registration number and all names, or contact the Master Admin.')
+        return {'student_token':token_encode('student',str(row['id']),ttl=1800),'student':student_record(conn,row['id'])}
+    finally:conn.close()
+
+@APP.get('/api/students/me')
+def student_me(user:dict=Depends(required_role('student'))):
+    conn=db()
+    try:return {'student':student_record(conn,authorized_student(conn,user))}
+    finally:conn.close()
+
+@APP.post('/api/students/seminar')
+def choose_seminar(body:SeminarSelection,user:dict=Depends(required_role('student'))):
+    if body.seminar_code not in SEMINARS: raise HTTPException(422,'Choose one of the three ST310 seminars.')
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        student_id=authorized_student(conn,user)
+        row=conn.execute('SELECT seminar_code,registration_number FROM students WHERE id=?',(student_id,)).fetchone()
+        if row['seminar_code']:
+            raise HTTPException(409,{'code':'SEMINAR_ALREADY_SELECTED','message':'You already have a seminar. Use Request Seminar Shift to change it.','seminar_code':row['seminar_code']})
+        conn.execute('UPDATE students SET seminar_code=? WHERE id=? AND seminar_code IS NULL',(body.seminar_code,student_id))
+        audit(conn,'student:'+str(student_id),'SEMINAR_SELECTED',body.seminar_code)
+        conn.execute('COMMIT')
+        return {'student':student_record(conn,student_id),'message':'Seminar selection saved.'}
+    except Exception:
+        if conn.in_transaction:conn.execute('ROLLBACK')
+        raise
+    finally:conn.close()
+
+@APP.post('/api/students/seminar/shift-request',status_code=201)
+def request_seminar_shift(body:SeminarShiftRequest,user:dict=Depends(required_role('student'))):
+    if body.to_code not in SEMINARS: raise HTTPException(422,'Choose a valid seminar.')
+    reason=' '.join(body.reason.split())
+    if len(reason)<5: raise HTTPException(422,'Please provide a reason for the seminar shift.')
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        student_id=authorized_student(conn,user)
+        row=conn.execute('SELECT seminar_code FROM students WHERE id=?',(student_id,)).fetchone()
+        current=row['seminar_code']
+        if not current: raise HTTPException(409,'Choose your first seminar before requesting a shift.')
+        if current==body.to_code: raise HTTPException(409,'You are already enrolled in that seminar.')
+        if conn.execute("SELECT id FROM seminar_shift_requests WHERE student_id=? AND status='pending'",(student_id,)).fetchone():
+            raise HTTPException(409,'You already have a pending seminar shift request.')
+        conn.execute('INSERT INTO seminar_shift_requests(student_id,from_code,to_code,reason,status,created_at) VALUES(?,?,?,?,?,?)',
+                     (student_id,current,body.to_code,reason,'pending',now_iso()))
+        audit(conn,'student:'+str(student_id),'SEMINAR_SHIFT_REQUESTED',f'{current} to {body.to_code}')
+        conn.execute('COMMIT')
+        return {'student':student_record(conn,student_id),'message':'Shift request sent to Master Admin. Your current seminar is unchanged.'}
+    except sqlite3.IntegrityError:
+        if conn.in_transaction: conn.execute('ROLLBACK')
+        raise HTTPException(409,'You already have a pending seminar shift request.')
+    except Exception:
+        if conn.in_transaction:conn.execute('ROLLBACK')
+        raise
+    finally:conn.close()
+
+@APP.get('/api/admin/seminars')
+def admin_seminar_overview(user:dict=Depends(required_role('admin'))):
+    conn=db()
+    try:
+        counts={r['seminar_code']:r['n'] for r in conn.execute('SELECT seminar_code,COUNT(*) n FROM students GROUP BY seminar_code')}
+        recent=conn.execute('''SELECT sh.id,sh.from_code,sh.to_code,sh.reason,sh.status,sh.created_at,
+                               s.registration_number,s.surname,s.first_name,s.second_name,s.programme
+                               FROM seminar_shift_requests sh JOIN students s ON s.id=sh.student_id
+                               ORDER BY CASE sh.status WHEN 'pending' THEN 0 ELSE 1 END,sh.created_at DESC,sh.id DESC''').fetchall()
+        return {'seminars':[dict(v,count=counts.get(k,0)) for k,v in SEMINARS.items()],
+                'unassigned':counts.get(None,0),'shift_requests':[dict(r) for r in recent]}
+    finally:conn.close()
+
+@APP.post('/api/admin/seminars/shift-requests/{shift_id}/decision')
+def admin_shift_decision(shift_id:int,body:SeminarShiftDecision,user:dict=Depends(required_role('admin'))):
+    if body.action not in ('approve','reject'):raise HTTPException(422,'Choose approve or reject.')
+    note=' '.join(body.note.split())
+    if len(note)<5: raise HTTPException(422,'Please provide an administrator decision note.')
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        req=conn.execute('SELECT * FROM seminar_shift_requests WHERE id=?',(shift_id,)).fetchone()
+        if not req: raise HTTPException(404,'Shift request not found.')
+        if req['status']!='pending': raise HTTPException(409,'This request has already been reviewed.')
+        current=conn.execute('SELECT seminar_code FROM students WHERE id=?',(req['student_id'],)).fetchone()
+        if not current or current['seminar_code']!=req['from_code']:
+            raise HTTPException(409,'The original seminar has changed. Review the student before deciding.')
+        if body.action=='approve':
+            conn.execute('UPDATE students SET seminar_code=? WHERE id=?',(req['to_code'],req['student_id']))
+        newstatus='approved' if body.action=='approve' else 'rejected'
+        conn.execute('UPDATE seminar_shift_requests SET status=?,reviewed_by=?,reviewed_at=?,review_note=? WHERE id=?',
+                     (newstatus,user['sub'],now_iso(),note,shift_id))
+        audit(conn,'master-admin','SEMINAR_SHIFT_'+newstatus.upper(),f"request {shift_id}: {req['from_code']} to {req['to_code']}")
+        conn.execute('COMMIT')
+        return {'status':newstatus,'message':'Shift request '+newstatus+'.'}
+    except Exception:
+        if conn.in_transaction:conn.execute('ROLLBACK')
+        raise
+    finally:conn.close()
+
+@APP.put('/api/admin/students/{student_id}')
+def update_student_record(student_id:int,body:AdminStudentEdit,user:dict=Depends(required_role('admin'))):
+    info=validate_person(body)
+    note=' '.join(body.reason.split())
+    if len(note)<8: raise HTTPException(422,'Provide a reason for this correction.')
+    if body.seminar_code not in (None,*SEMINARS): raise HTTPException(422,'Invalid seminar.')
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        original=conn.execute('SELECT * FROM students WHERE id=?',(student_id,)).fetchone()
+        if not original: raise HTTPException(404,'Student not found.')
+        if conn.execute('SELECT 1 FROM students WHERE reg_key=? AND id<>?',(info['reg_key'],student_id)).fetchone():
+            raise duplicate_error('registration_number')
+        for other in conn.execute('SELECT id,surname,first_name,second_name FROM students WHERE id<>?',(student_id,)):
+            if similarity_kind(other,info):
+                a,b=sorted((student_id,other['id']))
+                if not conn.execute('SELECT 1 FROM duplicate_exemptions WHERE student_a=? AND student_b=?',(a,b)).fetchone():
+                    raise HTTPException(409,'This correction looks like another student record. Resolve the possible duplicate first.')
+        cr=conn.execute('SELECT * FROM cr_accounts WHERE reg_key=?',(original['reg_key'],)).fetchone()
+        if cr:
+            if info['programme']!=original['programme']:
+                raise HTTPException(409,'A CR cannot change programme through student editing. Contact support.')
+            if info['reg_key']!=original['reg_key'] and conn.execute('SELECT 1 FROM cr_accounts WHERE reg_key=?',(info['reg_key'],)).fetchone():
+                raise HTTPException(409,'Another CR already uses that registration number.')
+        new_seminar=body.seminar_code if 'seminar_code' in body.model_fields_set else original['seminar_code']
+        old_values={k:original[k] for k in ('registration_number','surname','first_name','second_name','programme','seminar_code')}
+        conn.execute('''UPDATE students SET reg_key=:reg_key,registration_number=:registration_number,
+            surname=:surname,first_name=:first_name,second_name=:second_name,programme=:programme,seminar_code=:seminar_code
+            WHERE id=:id''',{**info,'seminar_code':new_seminar,'id':student_id})
+        if cr:
+            conn.execute('''UPDATE cr_accounts SET reg_key=?,registration_number=?,surname=?,first_name=?,second_name=? WHERE id=?''',
+                         (info['reg_key'],info['registration_number'],info['surname'],info['first_name'],info['second_name'],cr['id']))
+        pending=conn.execute("SELECT id FROM seminar_shift_requests WHERE student_id=? AND status='pending'",(student_id,)).fetchone()
+        if pending and new_seminar!=original['seminar_code']:
+            conn.execute('UPDATE seminar_shift_requests SET status=?,reviewed_by=?,reviewed_at=?,review_note=? WHERE id=?',
+                         ('rejected','master-admin',now_iso(),'Superseded by direct admin edit',pending['id']))
+        structural=any(original[k]!=info[k] for k in ('registration_number','surname','first_name','second_name','programme'))
+        if structural:
+            for programme in set((original['programme'],info['programme'])):
+                conn.execute('UPDATE programme_status SET revision=revision+1,cr_approved_at=NULL,cr_approved_revision=NULL WHERE programme=?',(programme,))
+            set_setting(conn,'final_approved_at','')
+        audit(conn,'master-admin','STUDENT_EDITED',json.dumps({'student_id':student_id,'before':old_values,'after':{**{k:info[k] for k in ('registration_number','surname','first_name','second_name','programme')},'seminar_code':new_seminar},'reason':note},ensure_ascii=False))
+        conn.execute('COMMIT')
+        return {'student':student_record(conn,student_id),'message':'Student record updated.'}
+    except sqlite3.IntegrityError:
+        if conn.in_transaction:conn.execute('ROLLBACK')
+        raise HTTPException(409,'Registration number conflicts with an existing account.')
+    except Exception:
+        if conn.in_transaction:conn.execute('ROLLBACK')
+        raise
+    finally:conn.close()
+
+
+def build_seminar_xlsx(groups, code=None):
+    # Same clean three-column format as the existing submission export.
+    wb=Workbook()
+    wb.remove(wb.active)
+    for seminar_code in ([code] if code else list(SEMINARS)):
+        info=SEMINARS[seminar_code]
+        ws=wb.create_sheet(info['day'].upper())
+        rows=groups.get(seminar_code,[])
+        ws.sheet_view.showGridLines=False
+        ws.merge_cells('A1:C1')
+        ws['A1']='ST310 — STATISTICAL INFERENCE II'
+        ws['A1'].font=Font(name='Aptos Display',size=17,bold=True,color='102C57')
+        ws.row_dimensions[1].height=35
+        ws.merge_cells('A2:C2')
+        ws['A2']=f"{info['label'].upper()}   |   {info['time']}   |   {info['venue']}"
+        ws['A2'].font=Font(name='Aptos',size=11,bold=True,color='705111')
+        ws.row_dimensions[2].height=28
+        ws.merge_cells('A3:C3')
+        ws['A3']=f"Academic Year: {ACADEMIC_YEAR}     Students: {len(rows)}"
+        ws['A3'].font=Font(name='Aptos',size=10,color='596C89')
+        for cell in ws[4][:3]:cell.fill=PatternFill('solid',fgColor='C99B37')
+        ws.row_dimensions[4].height=5
+        for i,text in enumerate(('STUDENT NAMES','REGISTRATION NUMBER','COURSE'),1):
+            cell=ws.cell(5,i,text)
+            cell.fill=PatternFill('solid',fgColor='102C57')
+            cell.font=Font(size=11,bold=True,color='FFFFFF')
+            cell.alignment=Alignment(vertical='center',indent=1)
+        ws.row_dimensions[5].height=29
+        order={p:i for i,p in enumerate(PROGRAMMES)}
+        rows=sorted(rows,key=lambda r:(order[r['programme']],r['surname'].casefold(),r['first_name'].casefold(),r['registration_number']))
+        for i,r in enumerate(rows,6):
+            full=' '.join(str(r[x]).strip() for x in ('surname','first_name','second_name') if r[x]).upper()
+            for col,val in enumerate((excel_safe(full),excel_safe(r['registration_number']),PROGRAMMES[r['programme']]),1):
+                c=ws.cell(i,col,val)
+                c.font=Font(name='Aptos',size=10,color='182B45',bold=(col==1))
+                c.fill=PatternFill('solid',fgColor='FFFFFF' if i%2==0 else 'F4F7FB')
+                c.border=Border(bottom=Side(style='hair',color='D7DEE7'))
+                c.alignment=Alignment(vertical='center',indent=1)
+                if col==2:c.number_format='@'
+            ws.row_dimensions[i].height=22
+        for col,width in {'A':43,'B':26,'C':36}.items():ws.column_dimensions[col].width=width
+        ws.freeze_panes='A6'
+        ws.print_area=f'A1:C{max(5,len(rows)+5)}'
+        ws.print_title_rows='1:5'
+        ws.sheet_properties.pageSetUpPr.fitToPage=True
+        ws.page_setup.orientation='landscape'
+        ws.page_setup.paperSize=ws.PAPERSIZE_A4
+        ws.page_setup.fitToWidth=1
+        ws.page_setup.fitToHeight=0
+        ws.page_margins=PageMargins(left=.25,right=.25,top=.45,bottom=.45,header=.2,footer=.2)
+    result=BytesIO()
+    wb.save(result)
+    return result.getvalue()
+
+@APP.get('/api/admin/seminars/export.xlsx')
+def export_seminars(user:dict=Depends(required_role('admin'))):
+    conn=db()
+    try:
+        groups={code:[dict(r) for r in conn.execute('SELECT surname,first_name,second_name,registration_number,programme FROM students WHERE seminar_code=?',(code,)).fetchall()] for code in SEMINARS}
+    finally:conn.close()
+    return Response(content=build_seminar_xlsx(groups),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename=ST310_Seminar_Groups.xlsx','Cache-Control':'no-store'})
+
+@APP.get('/api/admin/seminars/{seminar_code}/export.xlsx')
+def export_one_seminar(seminar_code:str,user:dict=Depends(required_role('admin'))):
+    if seminar_code not in SEMINARS:raise HTTPException(404,'Unknown seminar.')
+    conn=db()
+    try:
+        rows=[dict(r) for r in conn.execute('SELECT surname,first_name,second_name,registration_number,programme FROM students WHERE seminar_code=?',(seminar_code,)).fetchall()]
+    finally:conn.close()
+    return Response(content=build_seminar_xlsx({seminar_code:rows},seminar_code),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':f'attachment; filename=ST310_{seminar_code}_Seminar.xlsx','Cache-Control':'no-store'})
 
 APP.mount("/assets",StaticFiles(directory=str(STATIC/"assets")),name="assets")
 
