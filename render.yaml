@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: st310-street-finest
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /api/health
+    disk:
+      name: st310-database
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DB_PATH
+        value: /var/data/st310.sqlite3
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: CR_INVITE_MATH
+        sync: false
+      - key: CR_INVITE_BAEST
+        sync: false
+      - key: CR_INVITE_BAST
+        sync: false
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: INITIAL_REGISTRATION_OPEN
+        value: "0"
+      - key: ACADEMIC_YEAR
+        value: 2026/2027

@@ -1,0 +1,14 @@
+.git
+__pycache__
+.pytest_cache
+*.pyc
+*.sqlite3
+*.sqlite3-*
+.local_credentials.txt
+.env
+.env.*
+tests/
+screenshots/
+design_references/
+*.zip
+ST310_StreetFinest_Visual_Preview*.html
