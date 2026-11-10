@@ -17,7 +17,7 @@
     student: (()=>{try{return JSON.parse(sessionStorage.getItem('st310_student')||'null')}catch{return null}})(),
     error:'',cr:PREVIEW?previewCR:null,admin:PREVIEW?previewAdmin:null,
     adminStudents:PREVIEW?samples:[],duplicatePairs:[],
-    loading:false,search:'',busy:false,duplicateMessage:'',duplicateType:'',manualOpen:false,studentDraft:{}
+    loading:false,search:'',busy:false,duplicateMessage:'',duplicateType:'',    manualOpen:false,studentDraft:{}, studentToken:sessionStorage.getItem('st310_student_token')||'',seminars:null,editId:null
   };
   const app = document.getElementById('app');
   const esc = v => String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -34,6 +34,8 @@
     if(!resp.ok){const payload=await resp.json().catch(()=>({})); let detail=payload.detail||`Request failed (${resp.status})`; const code=detail&&typeof detail==='object'&&!Array.isArray(detail)?detail.code:''; if(Array.isArray(detail))detail=detail.map(d=>d.msg).join('; '); else if(detail&&typeof detail==='object')detail=detail.message||'Request failed.';let err=new Error(detail);err.status=resp.status;err.code=code;throw err;}
     return resp.json();
   }
+  async function studentApi(path,opts={}){const prev=state.token;const role=state.role;try{state.token=state.studentToken;state.role='student';return await api(path,opts)}finally{state.token=prev;state.role=role}}
+  function storeStudent(data){state.studentToken=data.student_token;state.student=data.student;sessionStorage.setItem('st310_student_token',data.student_token);sessionStorage.setItem('st310_student',JSON.stringify(data.student));}
   async function apiDownload(path, filename){
     const resp = await fetch('/api'+path,{headers:{Authorization:'Bearer '+state.token},cache:'no-store'});
     if(!resp.ok){const p=await resp.json().catch(()=>({}));throw new Error(p.detail||`Export unavailable (${resp.status})`)}
@@ -73,7 +75,7 @@
   const ornament = `<div class="divider-ornament" aria-hidden="true">🎓</div>`;
   function infoBanner(){return `<div class="info-banner"><span class="info-icon">i</span><span>For third-year students in <b>BSc Mathematics &amp; Statistics, BAEST, and BAST.</b></span></div>`}
   function welcome(){return `<section class="poster-screen" aria-label="ST310 Registration Portal"><img class="poster-image" src="/assets/welcome-reference.webp" alt="Welcome to the ST310 Registration Portal. Third Year Student Registration. Street Finest Education Solutions." /><button class="hotspot welcome-start" data-go="roles" aria-label="Get Started"><span class="visually-hidden">Get Started</span></button><button class="hotspot welcome-admin" data-go="admin-login" aria-label="Master Admin Login"><span class="visually-hidden">Master Admin Login</span></button><button class="quiet-admin" type="button" data-go="admin-login" aria-label="Master Admin access" title="Master Admin access">Σ</button></section>`;}
-  function roles(){return `<section class="poster-screen" aria-label="Choose how you want to continue"><img class="poster-image" src="/assets/roles-reference.webp" alt="Choose Student to register for ST310 or Class Representative to register or login." /><button class="hotspot role-student" data-go="student-register" aria-label="Continue as Student"><span class="visually-hidden">Student Registration</span></button><button class="hotspot role-cr" data-go="cr-auth" aria-label="Continue as Class Representative"><span class="visually-hidden">Class Representative Portal</span></button><button class="hotspot role-admin" data-go="admin-login" aria-label="Master Admin Login"><span class="visually-hidden">Master Admin Login</span></button></section>`;}
+  function roles(){return `<section class="poster-screen" aria-label="Choose how you want to continue"><img class="poster-image" src="/assets/roles-reference.webp" alt="Choose Student to register for ST310 or Class Representative to register or login." /><button class="hotspot role-student" data-go="student-services" aria-label="Continue as Student"><span class="visually-hidden">Student Registration</span></button><button class="hotspot role-cr" data-go="cr-auth" aria-label="Continue as Class Representative"><span class="visually-hidden">Class Representative Portal</span></button><button class="hotspot role-admin" data-go="admin-login" aria-label="Master Admin Login"><span class="visually-hidden">Master Admin Login</span></button></section>`;}
   function studentForm(){return `<section class="glass form-card student-form-card"><div class="form-title-row"><img src="/assets/student-icon.png" alt=""/><h1 class="page-heading">Student <span style="color:#a46c12">Registration</span></h1></div><div class="form-math" aria-hidden="true"><span>μ</span><span>𝒩(μ,σ²)</span></div>
     <form id="student-form" class="form-fields">
       ${field('Programme','programme',{select:true,required:true,value:state.selectedProgramme})}
@@ -87,7 +89,7 @@
   function success(){const s=state.student||samples[0];return `<section class="glass success-card"><div class="success-icon">✓</div><h1>Registration <span style="color:#12843f">Successful!</span></h1><p class="subtitle">You have successfully registered for ST310 Statistical Inference II.</p><div class="record-card">
     ${record('Student Name',rowname(s))}${record('Programme',PROGRAMMES[s.programme]||s.programme)}${record('Registration No.',s.registration_number)}${record('Status','Registered')}
     </div><div class="alert success">✓ Your name is automatically included in your programme's registration list. No individual CR approval is needed.</div>
-    <button class="btn-gold small" data-go="student-dashboard">View My Dashboard ➜</button></section>`}
+    <button class="btn-gold small" data-go="seminar-selection">▣ Choose Your Seminar ➜</button><button class="btn-outline full-width" data-go="student-dashboard">View My Dashboard</button></section>`}
   function duplicate(){const possible=state.duplicateType==='POSSIBLE_DUPLICATE';return `<section class="glass success-card"><div class="success-icon error">!</div><h1 style="color:#9d2433">${possible?'Possible Duplicate':'Already Registered'}</h1><p>${esc(state.duplicateMessage||'This registration appears to exist already.')}</p><div class="alert ${possible?'info':'error'}">${possible?'Check all three names carefully. If you are a different student, the Master Admin can verify and add your record.':'Please do not register again. Contact the Master Admin if you believe this is an error.'}</div><button class="btn-dark" style="width:100%" data-go="roles">Return to Portal</button></section>`;}
   function record(k,v){return `<div class="record-item"><strong>${esc(k)}</strong><span>${esc(v)}</span></div>`}
   function studentDashboard(){const s=state.student||samples[0];return `<section class="glass dashboard-card"><h1 class="dash-title">Student Dashboard</h1>${ornament}
@@ -97,9 +99,9 @@
       <div class="detail-line"><span class="dicon">▤</span><span class="dtext"><strong>Registration Number</strong>${esc(s.registration_number)}</span></div>
       <div class="detail-line"><span class="dicon">✓</span><span class="dtext"><strong>Registration Status</strong><span class="status-chip">✓ Registered</span></span></div>
     </div><div class="alert success" style="font-size:13px;margin-top:16px">✓ &nbsp;You have completed registration successfully for ST310 (Statistical Inference II).</div>
-    <div class="small-note" style="text-align:center;margin:16px 0 3px">Your registration is complete. Your CR will approve the programme's overall list, not individual student records.</div>
+    <div class="detail-line"><span class="dicon">▣</span><span class="dtext"><strong>Selected Seminar</strong>${esc(seminarLabel(s.seminar_code))}</span></div>${s.pending_shift?`<div class="alert info">Shift request pending: ${esc(seminarLabel(s.pending_shift.to_code))}. Your saved group remains ${esc(SEMINARS[s.seminar_code]?.day||"your current seminar")} until Admin approval.</div>`:""}<button class="btn-gold small" data-go="seminar-selection">${s.seminar_code?'View Seminar / Request Shift':'Choose Your Seminar'} ➜</button><div class="small-note" style="text-align:center;margin:16px 0 3px">Your CR approves the overall programme list, not individual student records.</div>
     </section>`}
-  function nav(role){let tabs=role==='student'?[['student-dashboard','Dashboard','⌂'],['roles','Home','⌖'],['student-dashboard','My Details','♙']]:role==='cr'?[['cr-dashboard','Dashboard','⌂'],['cr-students','Students','♟'],['cr-students','Class List','▤']]:[['admin-dashboard','Dashboard','⌂'],['admin-students','Students','♟'],['admin-dashboard','Export','⇩']];return `<nav class="menu-bar">${tabs.map(([page,label,glyph],i)=>`<button ${i===0?'class="active"':''} data-go="${page}" type="button"><span>${glyph}</span>${label}</button>`).join('')}<button data-action="logout" type="button"><span>↪</span>Exit</button></nav>`}
+  function nav(role){let tabs=role==='student'?[['student-dashboard','Dashboard','⌂'],['seminar-selection','Seminar','▣'],['student-services','Services','♙']]:role==='cr'?[['cr-dashboard','Dashboard','⌂'],['cr-students','Students','♟'],['cr-students','Class List','▤']]:[['admin-dashboard','Dashboard','⌂'],['admin-students','Students','♟'],['admin-seminars','Seminars','▣']];return `<nav class="menu-bar">${tabs.map(([page,label,glyph],i)=>`<button ${i===0?'class="active"':''} data-go="${page}" type="button"><span>${glyph}</span>${label}</button>`).join('')}<button data-action="logout" type="button"><span>↪</span>Exit</button></nav>`}
   function crAuth(){const register=state.crTab==='register';return `<section class="glass form-card"><h1 class="page-heading smaller">Class Representative<br>Portal</h1><div class="tab-switch">
     <button data-action="cr-tab-register" class="${register?'active':''}">Register as CR</button><button data-action="cr-tab-login" class="${!register?'active':''}">CR Login</button></div>
     ${register?`<h3 class="serif" style="margin:5px 0;font-size:20px">Register as Class Representative</h3><p class="small-note">One CR per programme. Registration also adds you to your programme's student list.</p>
@@ -116,19 +118,19 @@
     <form id="cr-login-form" class="form-fields">${field('Registration Number','registration_number',{required:true,placeholder:'Your student registration number'})}${field('PIN / Password','pin',{required:true,type:'password',placeholder:'Enter your PIN'})}${state.error}<button type="submit" class="btn-gold small" ${state.busy?'disabled':''}>Login to Dashboard ➜</button></form>`}
     <div class="alert info">ⓘ &nbsp;Each programme has one Class Representative only. No student-by-student approval is required.</div>
     <div class="form-footer"><button data-go="roles" class="btn-outline">← Back</button></div></section>`}
-  function crDashboard(){const d=state.cr||previewCR;const all=d.students||[];const shown=all.filter(s=>(rowname(s)+' '+s.registration_number).toLowerCase().includes(state.search.toLowerCase()));const count=d.display_count??all.length;
+  function crDashboard(){const d=state.cr||previewCR;const all=d.students||[];const shown=all.filter(s=>(rowname(s)+' '+s.registration_number).toLowerCase().includes(state.search.toLowerCase()));const count=d.display_count??all.length;const seminarCounts=Object.fromEntries(Object.keys(SEMINARS).map(k=>[k,all.filter(x=>x.seminar_code===k).length]));
     return `<section class="glass dashboard-card"><h1 class="dash-title">CR Dashboard</h1><div class="programme-pill">🎓 Programme: ${esc(d.programme_name||PROGRAMMES[d.programme])}</div><button class="btn-outline cr-refresh" type="button" data-action="refresh-cr">↻ Refresh Student List</button>
     <div class="stat-grid"><div class="stat-box"><div class="stat-glyph">♟</div><div class="stat-number">${count}</div><div class="stat-label">Total Registered Students</div></div>
     <div class="stat-box"><div class="stat-glyph">☑</div><div class="stat-number" style="font-size:29px;color:${d.approved_at?'#15834a':'#a46c12'}">${d.approved_at?'Approved':'Pending'}</div><div class="stat-label">Programme List Status</div></div></div>
-    <div class="list-card"><div class="section-title">♟ &nbsp;Registered Students List</div><input id="student-search" class="search-box" type="search" placeholder="Search name or registration number..." value="${esc(state.search)}" />
-    ${studentTable(shown,count,false,'cr-student-list')}<div class="list-footer">${state.search?`Showing ${shown.length} matching records`:`${PREVIEW?'Illustrative names':'Showing all '+count+' students'}`}</div><button class="btn-outline view-all-button" data-go="cr-students">View Full Class List (${count}) ↗</button></div>
+    ${seminarGroupStats(seminarCounts)}<div class="list-card"><div class="section-title">♟ &nbsp;Registered Students List</div><input id="student-search" class="search-box" type="search" placeholder="Search name or registration number..." value="${esc(state.search)}" />
+    ${studentTable(shown,count,false,'cr-student-list',true)}<div class="list-footer">${state.search?`Showing ${shown.length} matching records`:`${PREVIEW?'Illustrative names':'Showing all '+count+' students'}`}</div><button class="btn-outline view-all-button" data-go="cr-students">View Full Class List (${count}) ↗</button></div>
     ${d.duplicate_alert_count?`<div class="alert error">⚠ ${d.duplicate_alert_count} possible duplicate pair(s) require Master Admin review before programme approval. Contact the administrator.</div>`:''}
     <div class="approval-panel"><h3>✓ Confirm Class List</h3><p>Once you are satisfied with the current registered student list, approve the <b>entire programme list</b>. No individual student approval or class roster upload is needed.</p>
     ${d.approved_at?'<div class="approved-stamp">✓ Programme List Approved</div>':`<button class="btn-gold small" data-action="approve-cr" ${count===0||d.duplicate_alert_count?'disabled':''}>✓ Approve Programme List</button>`}</div>
     ${state.error}</section>`}
-  function crStudents(){const d=state.cr||previewCR;const all=d.students||[];const shown=all.filter(s=>(rowname(s)+' '+s.registration_number).toLowerCase().includes(state.search.toLowerCase()));return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Registered Students</h1><div class="programme-pill">🎓 ${esc(d.programme_name||PROGRAMMES[d.programme])}</div><button class="btn-outline cr-refresh" type="button" data-action="refresh-cr">↻ Refresh Student List</button><div class="list-card"><div class="section-title">♟ &nbsp;Entire Programme List (${all.length})</div><p class="small-note">Scroll down to view every registered student. Search by name or registration number.</p><input id="student-search" class="search-box" type="search" value="${esc(state.search)}" placeholder="Search name or registration number..." />${studentTable(shown,all.length,false,'cr-full-list')}<div class="list-footer">Showing ${shown.length} of ${all.length} students</div></div><button class="btn-outline" style="width:100%;margin-top:16px" data-go="cr-dashboard">← Back to CR Dashboard</button></section>`}
-  function studentTable(rows,count,showProgramme,listClass=''){return `<div class="table-scroller ${listClass}"><table class="student-table"><thead><tr><th>#</th><th>Student Name</th><th>Registration No.</th>${showProgramme?'<th>Programme</th>':''}</tr></thead>
-    <tbody>${rows.length?rows.map((s,i)=>`<tr><td>${i+1}</td><td><strong>${esc(rowname(s))}</strong></td><td class="reg-col">${esc(s.registration_number)}</td>${showProgramme?`<td>${esc(s.programme==='MATH'?'BSc Math & Stats':s.programme)}</td>`:''}</tr>`).join(''):`<tr><td colspan="${showProgramme?4:3}" style="text-align:center;padding:20px;color:#64799b">No students found.</td></tr>`}</tbody></table></div>`}
+  function crStudents(){const d=state.cr||previewCR;const all=d.students||[];const shown=all.filter(s=>(rowname(s)+' '+s.registration_number).toLowerCase().includes(state.search.toLowerCase()));return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Registered Students</h1><div class="programme-pill">🎓 ${esc(d.programme_name||PROGRAMMES[d.programme])}</div><button class="btn-outline cr-refresh" type="button" data-action="refresh-cr">↻ Refresh Student List</button><div class="list-card"><div class="section-title">♟ &nbsp;Entire Programme List (${all.length})</div><p class="small-note">Scroll down to view every registered student. Search by name or registration number.</p><input id="student-search" class="search-box" type="search" value="${esc(state.search)}" placeholder="Search name or registration number..." />${studentTable(shown,all.length,false,'cr-full-list',true)}<div class="list-footer">Showing ${shown.length} of ${all.length} students</div></div><button class="btn-outline" style="width:100%;margin-top:16px" data-go="cr-dashboard">← Back to CR Dashboard</button></section>`}
+  function studentTable(rows,count,showProgramme,listClass='',showSeminar=false){return `<div class="table-scroller ${listClass} ${showSeminar?'with-seminar':''}"><table class="student-table"><thead><tr><th>#</th><th>Student Name</th><th>Registration No.</th>${showProgramme?'<th>Programme</th>':''}${showSeminar?'<th>Seminar</th>':''}</tr></thead>
+    <tbody>${rows.length?rows.map((s,i)=>`<tr><td>${i+1}</td><td><strong>${esc(rowname(s))}</strong></td><td class="reg-col">${esc(s.registration_number)}</td>${showProgramme?`<td>${esc(s.programme==='MATH'?'BSc Math & Stats':s.programme)}</td>`:''}${showSeminar?`<td>${esc(s.seminar_code?SEMINARS[s.seminar_code]?.day:'Not selected')}</td>`:''}</tr>`).join(''):`<tr><td colspan="${3+Number(showProgramme)+Number(showSeminar)}" style="text-align:center;padding:20px;color:#64799b">No students found.</td></tr>`}</tbody></table></div>`}
   function adminDuplicateReview(){const pairs=state.duplicatePairs||[];return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Duplicate Review</h1><p class="small-note" style="text-align:center">Review potential matching three-part names before final approval.</p><div class="list-card"><div class="section-title">⚠ &nbsp;Possible Duplicate Records (${pairs.length})</div>${pairs.length?pairs.map((pair,i)=>`<div class="duplicate-pair"><div class="duplicate-pair-index">Pair ${i+1} · ${pair.kind==='matching_name'?'Same three names':'Similar three names'}</div><div class="duplicate-person"><strong>${esc(rowname(pair.first))}</strong><span>${esc(pair.first.registration_number)} · ${esc(PROGRAMMES[pair.first.programme])}</span></div><div class="duplicate-person"><strong>${esc(rowname(pair.second))}</strong><span>${esc(pair.second.registration_number)} · ${esc(PROGRAMMES[pair.second.programme])}</span></div><p class="small-note">Check class records or student IDs before deciding. Both records remain unchanged until you act.</p><div class="duplicate-pair-actions"><button class="btn-outline" type="button" data-action="keep-distinct" data-first="${pair.first.id}" data-second="${pair.second.id}">Keep Both — Verified</button><button class="btn-outline danger" type="button" data-action="remove-duplicate" data-first="${pair.first.id}" data-second="${pair.second.id}" data-remove="${pair.first.id}">Remove First</button><button class="btn-outline danger" type="button" data-action="remove-duplicate" data-first="${pair.first.id}" data-second="${pair.second.id}" data-remove="${pair.second.id}">Remove Second</button></div></div>`).join(''):'<div class="alert success">✓ No unresolved duplicate pairs. The list is ready for CR review.</div>'}</div><button class="btn-outline" style="width:100%;margin-top:16px" data-go="admin-dashboard">← Back to Master Admin</button>${state.error}</section>`}
   function adminLogin(){return `<section class="glass form-card"><h1 class="page-heading">Master Admin</h1><p class="small-note" style="text-align:center">Restricted access • ST310 Registration Control</p>${ornament}
     <form id="admin-login-form" class="form-fields">${field('Admin Username','username',{required:true,placeholder:'Enter admin username'})}${field('Admin Password','password',{required:true,type:'password',placeholder:'Enter admin password'})}
@@ -140,7 +142,7 @@
     <div class="admin-stat"><div class="ico">☑</div><div class="num">${d.approvals}/3</div><div class="label">CR Approved</div></div></div>
     <div class="list-card"><div class="section-title">🎓 &nbsp;Programme Overview</div>
       ${d.programmes.map(p=>`<div class="programme-row"><div class="badge-icon">🎓</div><div class="grow"><strong>${esc(p.label)}</strong><small>${p.count} registered students</small></div><span class="status-chip ${p.approved_at?'':'pending'}">${p.approved_at?'✓ CR Approved':'◷ Pending CR'}</span></div>`).join('')}
-      <button class="btn-outline" style="width:100%;margin-top:8px" data-go="admin-students">View Complete Student List →</button>
+      <button class="btn-outline" style="width:100%;margin-top:8px" data-go="admin-students">Manage Student Records →</button><button class="btn-outline full-width" data-go="admin-seminars">▣ Seminar Management & Exports →</button>
     </div>
     <div class="duplicate-alert-card"><div><strong>${d.duplicate_alert_count||0} potential duplicate pair(s)</strong><small>${d.duplicate_alert_count?'Review or remove incorrect records before final approval.':'No unresolved duplicate records.'}</small></div><button class="btn-outline" data-go="admin-duplicates">Review Records →</button></div>
     <div class="approval-panel"><h3>Final Class List</h3><p>${d.final_approved_at?'All three programme lists have been approved and finalised. You can export them.':approved?'All CRs have approved. You can now lock and approve the final combined class list.':'Final approval becomes available once all three Class Representatives have approved their programme lists.'}</p>
@@ -148,17 +150,77 @@
     </div>
     <div class="export-buttons"><button data-action="export-xlsx" ${!d.final_approved_at?'disabled':''}><span>▦</span> Export Excel</button><button data-action="export-pdf" ${!d.final_approved_at?'disabled':''}><span>▤</span> Export PDF</button></div>
     <div class="submission-export"><button class="btn-gold small" data-action="export-submission-xlsx" ${!d.final_approved_at?'disabled':''}><span aria-hidden="true">▦</span> Export Excel for Submission</button><p>One sheet • Student Names, Registration Number, Course • Sorted by programme and name</p></div>
-    <div class="settings-row"><div><strong>Registration Window</strong><small>${d.registration_open?'Open for new student registrations':'Closed to new registrations'}</small></div><button class="btn-outline" data-action="toggle-registration">${d.registration_open?'Close':'Reopen'}</button></div>
+    <div class="list-card"><div class="section-title">▣ &nbsp;Seminar Distribution</div>${seminarGroupStats(d.seminar_counts)}<p class="small-note">${d.seminar_counts?.null||0} students have not selected a seminar. Pending shift requests: ${d.pending_shifts||0}.</p><button class="btn-outline full-width" data-go="admin-seminars">View Requests & Export Seminars</button></div><div class="settings-row"><div><strong>Registration Window</strong><small>${d.registration_open?'Open for new student registrations':'Closed to new registrations'}</small></div><button class="btn-outline" data-action="toggle-registration">${d.registration_open?'Close':'Reopen'}</button></div>
     ${d.recent?.length?`<div class="list-card"><div class="section-title">◷ &nbsp;Recent Activity</div>${d.recent.slice(0,4).map(a=>`<div class="activity"><strong>${esc(a.event.replaceAll('_',' '))}</strong>${esc(a.detail)} <span class="text-muted"> · ${esc(a.timestamp?.slice(0,16)||'')}</span></div>`).join('')}</div>`:''}
     <div class="admin-review"><button class="btn-outline" data-action="toggle-review" aria-expanded="${state.manualOpen}">${state.manualOpen?'− Hide':'＋ Review a flagged registration'}</button>${state.manualOpen?`<div class="list-card"><h3 class="serif" style="margin:3px 0 10px">Verified Registration Exception</h3><p class="small-note">Use only after confirming that two students with similar names are genuinely different people.</p><form id="override-form" class="form-fields">${field('Programme','programme',{select:true,required:true})}${field('Surname','surname',{required:true})}${field('First Name','first_name',{required:true})}${field('Second Name','second_name',{required:true})}${field('Registration Number','registration_number',{required:true})}${field('Verification Reason','reason',{required:true,placeholder:'How did you confirm the student is different?'})}<button class="btn-gold small" type="submit">Add Verified Student</button></form></div>`:''}</div>
     ${state.error}</section>`}
-  function adminStudents(){const rows=(state.adminStudents||[]).filter(s=>(rowname(s)+' '+s.registration_number+' '+s.programme).toLowerCase().includes(state.search.toLowerCase()));return `<section class="glass dashboard-card"><h1 class="dash-title smaller">All Registered Students</h1><p class="small-note" style="text-align:center">ST310 — Combined class list across the three programmes</p><div class="list-card"><div class="section-title">♟ &nbsp;Student Registry</div><input id="student-search" class="search-box" type="search" value="${esc(state.search)}" placeholder="Search names, registration no., programme..." />${studentTable(rows,rows.length,true)}</div><button class="btn-outline" style="margin-top:17px;width:100%" data-go="admin-dashboard">← Back to Admin Dashboard</button></section>`}
-  function pageBody(){switch(state.page){case 'roles':return roles();case 'student-register':return studentForm();case 'student-success':return success();case 'student-duplicate':return duplicate();case 'student-dashboard':return studentDashboard();case 'cr-auth':return crAuth();case 'cr-dashboard':return crDashboard();case 'cr-students':return crStudents();case 'admin-login':return adminLogin();case 'admin-dashboard':return adminDashboard();case 'admin-duplicates':return adminDuplicateReview();case 'admin-students':return adminStudents();default:return welcome();}}
+  function adminStudents(){const rows=(state.adminStudents||[]).filter(s=>(rowname(s)+' '+s.registration_number+' '+s.programme).toLowerCase().includes(state.search.toLowerCase()));return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Manage Student Records</h1><p class="small-note" style="text-align:center">Search, review and safely correct saved student details.</p><div class="list-card"><div class="section-title">♟ &nbsp;Student Registry</div><input id="student-search" class="search-box" type="search" value="${esc(state.search)}" placeholder="Search names, registration no., programme..." /><div class="table-scroller"><table class="student-table admin-manage-table"><thead><tr><th>Student Name</th><th>Registration No.</th><th>Programme</th><th>Seminar</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td>${esc(rowname(s))}</td><td>${esc(s.registration_number)}</td><td>${esc(s.programme)}</td><td>${esc(SEMINARS[s.seminar_code]?.day||'—')}</td><td><button class="btn-outline compact-edit" data-action="edit-student" data-id="${s.id}">Edit</button></td></tr>`).join('')}</tbody></table></div><p class="small-note">Showing ${rows.length} records</p></div><button class="btn-outline full-width" data-go="admin-dashboard">← Back to Admin Dashboard</button></section>`}
+  const SEMINARS={
+    MON:{day:'Monday',time:'16:00–16:55',venue:'ALRC'},
+    THU:{day:'Thursday',time:'10:00–10:55',venue:'ALRB'},
+    FRI:{day:'Friday',time:'18:00–18:55',venue:'ALRD'}
+  };
+  const seminarLabel=code=>code&&SEMINARS[code]?`${SEMINARS[code].day} · ${SEMINARS[code].time} · ${SEMINARS[code].venue}`:'Not selected';
+  function studentServices(){return `<section class="glass dashboard-card"><h1 class="dash-title">Student Portal</h1>${ornament}
+    <p class="small-note" style="text-align:center">Choose the service you need for ST310 Statistical Inference II.</p>
+    <div class="service-choice"><button class="service-item" type="button" data-go="student-register"><span class="service-symbol">🎓</span><span><strong>Register for ST310</strong><small>First-time student registration</small></span><b>➜</b></button>
+    <button class="service-item" type="button" data-go="seminar-login"><span class="service-symbol">▣</span><span><strong>Choose Your Seminar</strong><small>Already registered? Continue here</small></span><b>➜</b></button></div>
+    <div class="alert info">ⓘ &nbsp;Students who have registered do not need to register again.</div><div class="form-footer"><button class="btn-outline" data-go="roles">← Back</button></div></section>`;}
+  function studentReview(){const p=state.studentDraft||{};return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Review Your Details</h1><p class="small-note">Check your information before submitting your registration.</p>
+    ${record('Student Name',[p.surname,p.first_name,p.second_name].filter(Boolean).join(' '))}
+    ${record('Registration Number',p.registration_number)}${record('Programme',PROGRAMMES[p.programme])}
+    <div class="alert info">ⓘ &nbsp;After registration you will be invited to choose one seminar.</div>${state.error}
+    <button class="btn-gold small" type="button" data-action="confirm-registration" ${state.busy?'disabled':''}>${state.busy?'Submitting...':'✓ Confirm & Register'}</button><button class="btn-outline full-width" data-go="student-register">← Edit Details</button></section>`;}
+  function studentSeminarLogin(){return `<section class="glass form-card"><h1 class="page-heading smaller">Choose Your Seminar</h1><p class="small-note">Already registered for ST310? Enter the same names and registration number used during registration.</p>
+    <form id="seminar-login-form" class="form-fields">${field('Surname','surname',{required:true,placeholder:'Surname used during registration'})}
+    ${field('First Name','first_name',{required:true,placeholder:'First name used during registration'})}${field('Second Name','second_name',{optional:true,placeholder:'Second name, if any'})}
+    ${field('Registration Number','registration_number',{required:true})}${state.error}
+    <button class="btn-gold small" type="submit" ${state.busy?'disabled':''}>Continue to Seminar ➜</button></form>
+    <p class="small-note">Your details are checked against the existing register. They cannot be used here to edit personal details.</p>
+    <button class="btn-outline full-width" data-go="student-services">← Back</button></section>`;}
+  function seminarOptions(selected){return Object.entries(SEMINARS).map(([code,s])=>`<label class="seminar-option ${code===selected?'selected':''}"><input type="radio" name="seminar_code" value="${code}" ${code===selected?'checked':''} required><span class="seminar-option-main"><strong>${s.day} Seminar</strong><small>◷ ${s.time} &nbsp; ◆ ${s.venue}</small></span></label>`).join('')}
+  function seminarSelection(){const s=state.student||{};const current=s.seminar_code;const pending=s.pending_shift;
+    return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Seminar Selection</h1>${ornament}
+      <div class="profile-panel"><div class="avatar">🎓</div><div><strong>${esc(rowname(s))}</strong><div class="small-note">${esc(s.registration_number)} · ${esc(PROGRAMMES[s.programme]||'')}</div></div></div>
+      ${current?`<div class="alert success"><strong>✓ Seminar Already Selected</strong><br>${esc(seminarLabel(current))}<br>Your current seminar is saved. You cannot select another seminar directly.</div>
+      ${pending?`<div class="alert info">Shift request pending: ${esc(seminarLabel(pending.to_code))}. Your current seminar remains unchanged until approval.</div>`:`<button class="btn-gold small" data-go="seminar-shift">Request Seminar Shift ➜</button>`}`:
+      `<p class="small-note">Choose one seminar from the three ST310 sessions. Only one selection is allowed.</p><form id="seminar-selection-form">${seminarOptions('')}${state.error}<button class="btn-gold small" type="submit" ${state.busy?'disabled':''}>✓ Confirm Seminar Selection</button></form>`}
+      <button class="btn-outline full-width" data-go="student-dashboard">← Back to Dashboard</button></section>`;}
+  function seminarShift(){const s=state.student||{};if(!s.seminar_code)return `<section class="glass dashboard-card"><p>Please choose a seminar first.</p><button class="btn-outline" data-go="seminar-selection">Back</button></section>`;
+    return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Request Seminar Shift</h1>${record('Current Seminar',seminarLabel(s.seminar_code))}
+    <p class="small-note">Your original seminar will stay active until Master Admin approves your request.</p>
+    <form id="seminar-shift-form"><label class="form-label" for="shift-target">New Seminar</label><select id="shift-target" class="input-control" name="to_code" required>${Object.entries(SEMINARS).filter(([code])=>code!==s.seminar_code).map(([code])=>`<option value="${code}">${esc(seminarLabel(code))}</option>`).join('')}</select>
+    <label class="form-label" for="shift-reason">Reason for Request</label><textarea id="shift-reason" class="input-control shift-reason" name="reason" minlength="5" maxlength="400" required placeholder="Explain why you need to change your seminar"></textarea>
+    ${state.error}<button class="btn-gold small" type="submit" ${state.busy?'disabled':''}>Submit Shift Request ➜</button></form><button class="btn-outline full-width" data-go="seminar-selection">← Back</button></section>`;}
+  function seminarGroupStats(counts){return `<div class="seminar-summary-grid">${Object.entries(SEMINARS).map(([code,s])=>`<div class="seminar-summary-item"><b>${s.day}</b><strong>${Number(counts?.[code]||0)}</strong><small>${s.time} · ${s.venue}</small></div>`).join('')}</div>`}
+  function adminSeminars(){const d=state.seminars||{seminars:[],unassigned:0,shift_requests:[]};const counts=Object.fromEntries((d.seminars||[]).map(s=>[s.code,s.count]));const pending=(d.shift_requests||[]).filter(s=>s.status==='pending');return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Seminar Management</h1>
+    ${seminarGroupStats(counts)}<p class="small-note">Students without a selected seminar: <b>${d.unassigned||0}</b>. Counts are based on saved assignments, not attendance.</p>
+    <div class="list-card"><div class="section-title">▦ &nbsp;Seminar Exports</div><button class="btn-gold small" data-action="export-seminars">⬇ Export All 3 Seminar Groups (Excel)</button>
+      <div class="seminar-export-links">${Object.entries(SEMINARS).map(([code,s])=>`<button class="btn-outline" type="button" data-action="export-one-seminar" data-code="${code}">⬇ ${s.day} (${s.venue})</button>`).join('')}</div>
+      <p class="small-note">Every file contains Student Names, Registration Number and Course, grouped by programme and sorted A–Z.</p></div>
+    <div class="list-card"><div class="section-title">⇄ &nbsp;Seminar Shift Requests (${pending.length})</div>
+      ${pending.length?pending.map(r=>`<div class="shift-request-item"><strong>${esc(rowname(r))}</strong><small>${esc(r.registration_number)} · ${esc(PROGRAMMES[r.programme])}</small><span>${esc(SEMINARS[r.from_code]?.day)} → ${esc(SEMINARS[r.to_code]?.day)}</span><p>${esc(r.reason)}</p>
+      <div class="shift-action-row"><button class="btn-outline" data-action="shift-decision" data-id="${r.id}" data-decision="approve">✓ Approve Shift</button><button class="btn-outline danger" data-action="shift-decision" data-id="${r.id}" data-decision="reject">Reject</button></div></div>`).join(''):'<div class="alert success">✓ No pending seminar shift requests.</div>'}</div>${state.error}
+    <button class="btn-outline full-width" data-go="admin-dashboard">← Back to Admin Dashboard</button></section>`;}
+  function adminStudentEdit(){const s=(state.adminStudents||[]).find(x=>Number(x.id)===Number(state.editId));if(!s)return `<section class="glass dashboard-card"><p>Student not found.</p><button data-go="admin-students" class="btn-outline">Back</button></section>`;
+    return `<section class="glass dashboard-card"><h1 class="dash-title smaller">Edit Student Record</h1><div class="alert info">Changes to names, registration numbers or programme require the relevant CR to approve the programme list again. Seminar changes do not reset programme approval.</div>
+      <form id="admin-edit-form" class="form-fields">
+        <div class="edit-field"><label for="edit-surname">Surname</label><input id="edit-surname" name="surname" class="input-control" value="${esc(s.surname)}" required></div>
+        <div class="edit-field"><label for="edit-first">First Name</label><input id="edit-first" name="first_name" class="input-control" value="${esc(s.first_name)}" required></div>
+        <div class="edit-field"><label for="edit-second">Second Name (optional)</label><input id="edit-second" name="second_name" class="input-control" value="${esc(s.second_name)}"></div>
+        <div class="edit-field"><label for="edit-reg">Registration Number</label><input id="edit-reg" name="registration_number" class="input-control" value="${esc(s.registration_number)}" maxlength="13" inputmode="numeric" pattern="[0-9]{4}-04-[0-9]{5}" data-reg-format="1" required></div>
+        <div class="edit-field"><label for="edit-prog">Programme</label><select id="edit-prog" name="programme" class="input-control">${programmeOptions(s.programme)}</select></div>
+        <div class="edit-field"><label for="edit-seminar">Seminar Assignment</label><select id="edit-seminar" name="seminar_code" class="input-control"><option value="" ${!s.seminar_code?'selected':''}>Not selected</option>${Object.keys(SEMINARS).map(code=>`<option value="${code}" ${s.seminar_code===code?'selected':''}>${esc(seminarLabel(code))}</option>`).join('')}</select></div>
+        <div class="edit-field"><label for="edit-reason">Correction Reason</label><textarea id="edit-reason" name="reason" class="input-control shift-reason" minlength="8" maxlength="400" required placeholder="Why is this correction needed?"></textarea></div>
+        ${state.error}<button class="btn-gold small" type="submit" ${state.busy?'disabled':''}>✓ Save Verified Changes</button>
+      </form><button class="btn-outline full-width" data-go="admin-students">← Cancel</button></section>`;}
+
+  function pageBody(){switch(state.page){case 'roles':return roles();case 'student-services':return studentServices();case 'student-register':return studentForm();case 'student-review':return studentReview();case 'seminar-login':return studentSeminarLogin();case 'seminar-selection':return seminarSelection();case 'seminar-shift':return seminarShift();case 'student-success':return success();case 'student-duplicate':return duplicate();case 'student-dashboard':return studentDashboard();case 'cr-auth':return crAuth();case 'cr-dashboard':return crDashboard();case 'cr-students':return crStudents();case 'admin-login':return adminLogin();case 'admin-dashboard':return adminDashboard();case 'admin-duplicates':return adminDuplicateReview();case 'admin-students':return adminStudents();case 'admin-edit':return adminStudentEdit();case 'admin-seminars':return adminSeminars();default:return welcome();}}
   function render(){
     const standalone=state.page==='welcome'||state.page==='roles';
-    const student=state.page==='student-dashboard';
+    const student=['student-dashboard','seminar-selection','seminar-shift'].includes(state.page);
     const cr=state.page==='cr-dashboard'||state.page==='cr-students';
-    const admin=state.page==='admin-dashboard'||state.page==='admin-students'||state.page==='admin-duplicates';
+    const admin=['admin-dashboard','admin-students','admin-duplicates','admin-edit','admin-seminars'].includes(state.page);document.body.classList.toggle('admin-responsive',admin);
     const previewBadge=PREVIEW?'<div class="preview-label">DEMO — SAMPLE DATA ONLY</div>':'';
     if(standalone){app.innerHTML=`<main class="shell poster-shell">${pageBody()}${previewBadge}</main>`;return;}
     const art=student?'<img class="dashboard-art" src="/assets/reference-academic-strip.webp" alt="Statistics study materials and graduation cap" />':'';
@@ -182,12 +244,15 @@
           if(state.role!=='admin'||!state.token){go('admin-login');return;}
           const data=await api('/admin/duplicates');state.duplicatePairs=data.pairs;
         }
-        if(page==='admin-students'){
+        if(page==='admin-students'||page==='admin-edit'){
           if(state.role!=='admin'||!state.token){go('admin-login');return;}
           const data=await api('/admin/students');state.adminStudents=data.students;
         }
-        if((page==='student-dashboard'||page==='student-success')&&!state.student){go('student-register');return;}
-      }catch(e){ if(e.status===401){state.role='';state.token='';sessionStorage.removeItem('st310_token');sessionStorage.removeItem('st310_role');go(page.startsWith('cr-')?'cr-auth':'admin-login');return;}state.error=`<div class="alert error">${esc(e.message)}</div>`;}
+        if(page==='admin-seminars'){if(state.role!=='admin'||!state.token){go('admin-login');return;}state.seminars=await api('/admin/seminars');}
+        if(['seminar-selection','seminar-shift','student-dashboard'].includes(page)&&state.studentToken){const result=await studentApi('/students/me');state.student=result.student;sessionStorage.setItem('st310_student',JSON.stringify(state.student));}
+        if(['seminar-selection','seminar-shift'].includes(page)&&!state.studentToken){go('seminar-login');return;}
+        if((page==='student-dashboard'||page==='student-success')&&!state.student){go('student-services');return;}
+      }catch(e){ if(e.status===401){if(['seminar-selection','seminar-shift','student-dashboard'].includes(page)){state.studentToken='';sessionStorage.removeItem('st310_student_token');go('seminar-login');return;}state.role='';state.token='';sessionStorage.removeItem('st310_token');sessionStorage.removeItem('st310_role');go(page.startsWith('cr-')?'cr-auth':'admin-login');return;}state.error=`<div class="alert error">${esc(e.message)}</div>`;}
     }
     render();window.scrollTo({top:0,behavior:'instant'});
   }
@@ -213,9 +278,23 @@
     if(action==='refresh-cr'){if(PREVIEW){render();return;}await enter(state.page==='cr-students'?'cr-students':'cr-dashboard');return;}
     if(action==='toggle-review'){state.manualOpen=!state.manualOpen;state.error='';render();return;}
     if(action==='cr-tab-register'||action==='cr-tab-login'){state.error='';state.crTab=action.endsWith('register')?'register':'login';render();return;}
-    if(action==='logout'){state.token='';state.role='';state.student=null;state.cr=null;state.admin=null;sessionStorage.removeItem('st310_token');sessionStorage.removeItem('st310_role');sessionStorage.removeItem('st310_student');go('welcome');return;}
+    if(action==='logout'){state.studentToken='';sessionStorage.removeItem('st310_student_token');state.token='';state.role='';state.student=null;state.cr=null;state.admin=null;sessionStorage.removeItem('st310_token');sessionStorage.removeItem('st310_role');sessionStorage.removeItem('st310_student');go('welcome');return;}
     if(PREVIEW){if(action==='approve-cr'){state.cr={...state.cr,approved_at:'2026-11-10'};render();return;}if(action==='final-approve'){state.admin={...state.admin,final_approved_at:'2026-11-10',registration_open:false};render();return;}if(action==='toggle-registration'){state.admin={...state.admin,registration_open:!state.admin.registration_open};render();return;}if(action.startsWith('export-')){message('Design preview only. Run the real app with Admin login to download actual files.','info');return;}}
     try{
+      if(action==='confirm-registration'){
+        if(state.busy)return;state.busy=true;render();
+        try{const result=await api('/students/register',{method:'POST',body:JSON.stringify(state.studentDraft)});storeStudent(result);state.studentDraft={};go('student-success');}
+        catch(ex){if(ex.status===409){state.duplicateMessage=ex.message;state.duplicateType=ex.code;go('student-duplicate')}else message(ex.message)}
+        finally{state.busy=false;render();}return;
+      }
+      if(action==='edit-student'){state.editId=Number(b.dataset.id);go('admin-edit');return;}
+      if(action==='export-seminars'){await apiDownload('/admin/seminars/export.xlsx','ST310_Seminar_Groups.xlsx');return;}
+      if(action==='export-one-seminar'){await apiDownload('/admin/seminars/'+b.dataset.code+'/export.xlsx','ST310_'+b.dataset.code+'_Seminar.xlsx');return;}
+      if(action==='shift-decision'){
+        const actionName=b.dataset.decision;if(!confirm('Confirm '+actionName+' for this seminar shift?'))return;
+        const note=prompt('Administrator decision note (at least 5 characters):');if(!note||note.trim().length<5)return;
+        await api('/admin/seminars/shift-requests/'+Number(b.dataset.id)+'/decision',{method:'POST',body:JSON.stringify({action:actionName,note:note.trim()})});await enter('admin-seminars');return;
+      }
       if(action==='approve-cr'){
         if(!confirm('Confirm that you have reviewed the registered student list and approve the entire programme list?'))return;
         await api('/cr/approve',{method:'POST',body:JSON.stringify({revision:state.cr.revision,count:state.cr.students.length})}); await enter('cr-dashboard');return;
@@ -254,7 +333,7 @@
   });
   document.addEventListener('change',e=>{if(e.target.id==='programme')state.selectedProgramme=e.target.value;});
   document.addEventListener('submit',async e=>{
-    const f=e.target;if(!['student-form','cr-register-form','cr-login-form','admin-login-form','override-form'].includes(f.id))return;
+    const f=e.target;if(!['student-form','cr-register-form','cr-login-form','admin-login-form','override-form','seminar-login-form','seminar-selection-form','seminar-shift-form','admin-edit-form'].includes(f.id))return;
     e.preventDefault(); if(state.busy)return;
     const data=formObject(f);
     if('registration_number' in data && !/^[0-9]{4}-04-[0-9]{5}$/.test(data.registration_number)){
@@ -263,11 +342,14 @@
     }
     state.busy=true;state.error='';
     try{
-      if(f.id==='student-form'){
-        state.studentDraft=data;
-        if(PREVIEW){state.student={...data};sessionStorage.setItem('st310_student',JSON.stringify(state.student));go('student-success');return;}
-        const result=await api('/students/register',{method:'POST',body:JSON.stringify(data)});
-        state.student=result.student;state.studentDraft={};sessionStorage.setItem('st310_student',JSON.stringify(state.student));go('student-success');return;
+      if(f.id==='student-form'){state.studentDraft=data;go('student-review');return;}
+      if(f.id==='seminar-login-form'){const result=await api('/students/verify',{method:'POST',body:JSON.stringify(data)});storeStudent(result);go('seminar-selection');return;}
+      if(f.id==='seminar-selection-form'){const result=await studentApi('/students/seminar',{method:'POST',body:JSON.stringify(data)});state.student=result.student;sessionStorage.setItem('st310_student',JSON.stringify(result.student));go('student-dashboard');return;}
+      if(f.id==='seminar-shift-form'){const result=await studentApi('/students/seminar/shift-request',{method:'POST',body:JSON.stringify(data)});state.student=result.student;sessionStorage.setItem('st310_student',JSON.stringify(result.student));go('seminar-selection');return;}
+      if(f.id==='admin-edit-form'){
+        if(!confirm('Save these verified corrections?'))return;
+        if(data.seminar_code==='')data.seminar_code=null;
+        await api('/admin/students/'+state.editId,{method:'PUT',body:JSON.stringify(data)});go('admin-students');return;
       }
       if(f.id==='override-form'){
         if(PREVIEW){state.error='<div class="alert info">Demo mode: records are not saved.</div>';render();return;}
@@ -286,7 +368,7 @@
         if(PREVIEW){go('admin-dashboard');return;}
         const result=await api('/admin/login',{method:'POST',body:JSON.stringify(data)});storeToken(result,'admin');go('admin-dashboard');return;
       }
-    }catch(ex){if(f.id==='student-form'&&ex.status===409){state.error='';state.duplicateMessage=ex.message;state.duplicateType=ex.code;go('student-duplicate');return;}state.error=`<div class="alert error" role="alert">${esc(ex.message)}</div>`;}
+    }catch(ex){if(f.id==='seminar-selection-form'&&ex.status===409){try{state.student=(await studentApi('/students/me')).student}catch{};go('seminar-selection');return;}if(f.id==='student-form'&&ex.status===409){state.error='';state.duplicateMessage=ex.message;state.duplicateType=ex.code;go('student-duplicate');return;}state.error=`<div class="alert error" role="alert">${esc(ex.message)}</div>`;}
     finally{state.busy=false;render();}
   });
   window.addEventListener('hashchange',()=>enter((location.hash||'#welcome').slice(1).split('?')[0]));
