@@ -1,0 +1,42 @@
+
+name: Street Finest V4.0 preflight
+
+on:
+  push:
+    branches: [v4-prep]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test hub features and legacy data protection
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt 'httpx>=0.27,<1'
+
+      - name: Python endpoint and SQLite integrity tests
+        run: python tests/test_hub_v4.py
+
+      - name: JavaScript syntax check
+        run: node --check static/assets/hub.js
+
+      - name: Fourteen page-template rendering checks
+        run: node tests/check_frontend_render.cjs
