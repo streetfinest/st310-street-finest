@@ -13,6 +13,8 @@ services:
     envVars:
       - key: DB_PATH
         value: /var/data/st310.sqlite3
+      - key: HUB_UPLOAD_DIR
+        value: /var/data/hub_uploads
       - key: ADMIN_USERNAME
         value: admin
       - key: ADMIN_PASSWORD

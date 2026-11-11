@@ -1,3 +1,13 @@
+# ARCHIVED V3.3 deployment instructions
+
+**V4.0 users: do not follow the legacy steps below to deploy directly.** Read `V4_README.md` and `V4_DEPLOYMENT_GATES.md` instead.
+
+---
+
+# EXISTING LIVE PROJECT: READ SAFE_UPGRADE_FROM_V3_2.md FIRST
+
+Your Render portal is already live. Do not create a fresh service or replace its persistent database. The instructions below describe clean FIRST-TIME deployments, not upgrades.
+
 # ST310 Street Finest — clean deployment checklist
 
 This package is source-only. It contains **no local SQLite student database, no student registrations, no saved admin passwords, no test-suite fixtures, and no demo-mode records**. Production preview mode is disabled. A fresh persistent disk initializes the database with zero students, zero CRs and registration **closed**.

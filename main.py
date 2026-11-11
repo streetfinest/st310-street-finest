@@ -1345,10 +1345,19 @@ def export_one_seminar(seminar_code:str,user:dict=Depends(required_role('admin')
     finally:conn.close()
     return Response(content=build_seminar_xlsx({seminar_code:rows},seminar_code),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':f'attachment; filename=ST310_{seminar_code}_Seminar.xlsx','Cache-Control':'no-store'})
 
+# V4.0 modules are additive and isolated from legacy ST310 tables.
+import hub_v4
+hub_v4.install(APP, db=db, DB_PATH=DB_PATH, PROGRAMMES=PROGRAMMES,
+    ACADEMIC_YEAR=ACADEMIC_YEAR, auth=auth, required_role=required_role,
+    token_encode=token_encode, reg_key=reg_key, name_val=name_val,
+    normalized_name=normalized_name, similarity_kind=similarity_kind,
+    validate_person=validate_person, audit=audit, fetch_setting=fetch_setting,
+    set_setting=set_setting, now_iso=now_iso)
+
 APP.mount("/assets",StaticFiles(directory=str(STATIC/"assets")),name="assets")
 
 @APP.get("/{full_path:path}")
 def frontend(full_path:str):
     if full_path.startswith("api/"):
         raise HTTPException(404,"Not found")
-    return FileResponse(STATIC/"index.html")
+    return FileResponse(STATIC / ("index.html" if full_path.startswith("st310") else "hub.html"))
